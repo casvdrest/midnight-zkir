@@ -724,7 +724,13 @@ from-bytes32-fwd {P} {S} {st} {st'} {bytes} {curve25519-scalar} {output}
 ... | just (val-bytes32 b) with refl ← st≡ =
         b , ⊢-pres P st output _ bytes fresh eqv
       , inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (assign-here P st output _))))))
-from-bytes32-fwd {st = st} {bytes = bytes} {bytes32} _ st≡
+from-bytes32-fwd {st = st} {bytes = bytes} {bool} _ st≡
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 _) = case st≡ of λ ()
+from-bytes32-fwd {st = st} {bytes = bytes} {byte} _ st≡
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 _) = case st≡ of λ ()
+from-bytes32-fwd {st = st} {bytes = bytes} {bytes⟨ _ ⟩} _ st≡
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 _) = case st≡ of λ ()
 from-bytes32-fwd {st = st} {bytes = bytes} {jubjub-point} _ st≡
@@ -906,12 +912,12 @@ bytes32-into-low-high-fwd : ∀ {P S st st' bytes loid hiid}
 bytes32-into-low-high-fwd {P} {S} {st} {st'} {bytes} {loid} {hiid}
   freshl freshh loid≢hiid st≡
   with resolve (State.mem st) bytes in eqv
-... | just (val-bytes32 b) with bytes32→low-high b in eqs
-...   | (lo , hi) with refl ← st≡ =
+... | just (val-bytes32 b) with refl ← st≡ =
+  let (lo , hi) = bytes32→low-high b in
           b , lo , hi
         , ⊢-pres2 P st loid (val-native lo) hiid (val-native hi) bytes
             freshl freshh (λ hiid≡loid → loid≢hiid (sym hiid≡loid)) eqv
-        , eqs
+        , refl
         , assign-inner P st loid (val-native lo) hiid (val-native hi) loid≢hiid
         , assign-outer P st loid (val-native lo) hiid (val-native hi)
 
@@ -1093,7 +1099,9 @@ resolveᶜ-Fr-mem-agree m pis cr (imm x) = refl
 resolveᶜ-Fr-mem-agree m pis cr (var id) with m id
 ... | nothing                    = refl
 ... | just (val-native _)        = refl
-... | just (val-bytes32 _)       = refl
+... | just (val-bool _)       = refl
+... | just (val-byte _)       = refl
+... | just (val-bytes _ _)     = refl
 ... | just (val-jubjub-point _)  = refl
 ... | just (val-jubjub-scalar _) = refl
 ... | just (val-secp256k1-point _)    = refl
@@ -1427,7 +1435,13 @@ step-pi-outs {st = st} (from-bytes32 bytes curve25519-base output) ss e pi
 step-pi-outs {st = st} (from-bytes32 bytes curve25519-scalar output) ss e pi
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) with refl ← e = pi , λ _ → refl
-step-pi-outs {st = st} (from-bytes32 bytes bytes32 output) ss e pi
+step-pi-outs {st = st} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output) ss e pi
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-pi-outs {st = st} (from-bytes32 bytes bool output) ss e pi
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-pi-outs {st = st} (from-bytes32 bytes byte output) ss e pi
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) = case e of λ ()
 step-pi-outs {st = st} (from-bytes32 bytes jubjub-point output) ss e pi
@@ -1450,8 +1464,7 @@ step-pi-outs {st = st} (reverse-bytes bytes output) ss e pi
 ... | just (val-bytes32 b) with refl ← e = pi , λ _ → refl
 step-pi-outs {st = st} (bytes32-into-low-high bytes (loid , hiid)) ss e pi
   with resolve (State.mem st) bytes
-... | just (val-bytes32 b) with bytes32→low-high b
-...   | (lo , hi) with refl ← e = pi , λ _ → refl
+... | just (val-bytes32 b) with refl ← e = pi , λ _ → refl
 step-pi-outs {st = st} (bytes32-from-low-high (loop , hiop) output) ss e pi
   with resolveᶠ (State.mem st) loop | resolveᶠ (State.mem st) hiop
 ... | just lo | just hi with low-high→bytes32 lo hi
@@ -1853,10 +1866,13 @@ decode-encode-chunk jubjub-scalar (f ∷ []) {v} ieq
   with jubjubScalarFromFr f in e
 ... | just s with refl ← ieq =
         cong (_∷ []) (jubjubScalar-sound {f} {s} e)
-decode-encode-chunk bytes32 (lo ∷ hi ∷ []) {v} ieq
-  with low-high→bytes32 lo hi in e
-... | just b with refl ← ieq
-        rewrite bytes32-sound {lo} {hi} {b} e = refl
+decode-encode-chunk bool (x ∷ []) {v} ieq
+  with fr→bool x in e
+... | just b with refl ← ieq = cong (_∷ []) (bool-sound e)
+decode-encode-chunk byte (x ∷ []) ieq = byte-sound ieq
+decode-encode-chunk (bytes⟨ n ⟩) xs {v} ieq
+  with decode-bytes n xs in e
+... | just bs with refl ← ieq = bytes-sound n xs e
 decode-encode-chunk jubjub-point (x ∷ y ∷ []) {v} ieq
   with fromCoordsJ x y in e
 ... | just p with refl ← ieq
@@ -1901,9 +1917,10 @@ decode-encode-chunk curve25519-point (a ∷ b ∷ c ∷ d ∷ []) {v} ieq
         rewrite curve25519Point-sound {a} {b} {c} {d} {p} pr = refl
 decode-encode-chunk native [] ieq = case ieq of λ ()
 decode-encode-chunk native (_ ∷ _ ∷ _) ieq = case ieq of λ ()
-decode-encode-chunk bytes32 [] ieq = case ieq of λ ()
-decode-encode-chunk bytes32 (_ ∷ []) ieq = case ieq of λ ()
-decode-encode-chunk bytes32 (_ ∷ _ ∷ _ ∷ _) ieq = case ieq of λ ()
+decode-encode-chunk bool [] ieq = case ieq of λ ()
+decode-encode-chunk bool (_ ∷ _ ∷ _) ieq = case ieq of λ ()
+decode-encode-chunk byte [] ieq = case ieq of λ ()
+decode-encode-chunk byte (_ ∷ _ ∷ _) ieq = case ieq of λ ()
 decode-encode-chunk jubjub-point [] ieq = case ieq of λ ()
 decode-encode-chunk jubjub-point (_ ∷ []) ieq = case ieq of λ ()
 decode-encode-chunk jubjub-point (_ ∷ _ ∷ _ ∷ _) ieq = case ieq of λ ()

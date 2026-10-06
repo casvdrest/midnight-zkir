@@ -624,7 +624,13 @@ step→bwd {st = st} (into-bytes32 input output) e
 step→bwd {st = st} (from-bytes32 bytes native output) e
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) with refl ← e = _ , refl
-step→bwd {st = st} (from-bytes32 bytes bytes32 output) e
+step→bwd {st = st} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output) e
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step→bwd {st = st} (from-bytes32 bytes bool output) e
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step→bwd {st = st} (from-bytes32 bytes byte output) e
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) = case e of λ ()
 step→bwd {st = st} (from-bytes32 bytes jubjub-point output) e
@@ -665,8 +671,7 @@ step→bwd {st = st} (reverse-bytes bytes output) e
 ... | just (val-bytes32 b) with refl ← e = _ , refl
 step→bwd {st = st} (bytes32-into-low-high bytes (loid , hiid)) e
   with resolve (State.mem st) bytes
-... | just (val-bytes32 b) with bytes32→low-high b
-...   | (lo , hi) with refl ← e = _ , _ , refl
+... | just (val-bytes32 b) with refl ← e = _ , _ , refl
 step→bwd {st = st} (bytes32-from-low-high (loop , hiop) output) e
   with resolveᶠ (State.mem st) loop | resolveᶠ (State.mem st) hiop
 ... | just lo | just hi with low-high→bytes32 lo hi
@@ -1515,7 +1520,11 @@ mutual
                 case out-val P st output (val-curve25519-scalar x) drs of λ ()
     ...       | inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (inj₁ dcb))))) =
                 case out-val P st output (val-curve25519-scalar x) dcb of λ ()
-  bwd-go (from-bytes32 bytes bytes32 output ∷ is) st Γ bound ss dΓ sa wt teq
+  bwd-go (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output ∷ is) st Γ bound ss dΓ sa wt teq
+    dom (bw-cons _ _ _ _ () _) csat
+  bwd-go (from-bytes32 bytes bool output ∷ is) st Γ bound ss dΓ sa wt teq
+    dom (bw-cons _ _ _ _ () _) csat
+  bwd-go (from-bytes32 bytes byte output ∷ is) st Γ bound ss dΓ sa wt teq
     dom (bw-cons _ _ _ _ () _) csat
   bwd-go (from-bytes32 bytes jubjub-point output ∷ is) st Γ bound ss dΓ sa wt
     teq dom (bw-cons _ _ _ _ () _) csat

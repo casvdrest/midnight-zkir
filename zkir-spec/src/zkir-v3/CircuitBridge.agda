@@ -280,7 +280,9 @@ resolveᶜ-Fr-agree P st (imm x)  = refl
 resolveᶜ-Fr-agree P st (var id) with State.mem st id
 ... | nothing                    = refl
 ... | just (val-native _)        = refl
-... | just (val-bytes32 _)       = refl
+... | just (val-bool _)       = refl
+... | just (val-byte _)       = refl
+... | just (val-bytes _ _)     = refl
 ... | just (val-jubjub-point _)  = refl
 ... | just (val-jubjub-scalar _) = refl
 ... | just (val-secp256k1-point _)    = refl

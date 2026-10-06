@@ -12,6 +12,17 @@ It does not yet cover the instruction/type batch landed by PR #10
 ("Bring lost PRs from midnight-ledger"), already on this branch's tip
 — see the pin section of the companion spec for details.
 
+**ZKIR 3.1 update, in progress.** The type layer has been brought up to
+ZKIR 3.1 (`midnight-zkir 3.1.0`): `Types` now has the fifteen 3.1 types
+(adding `bool`, `byte`, and `bytes⟨ n ⟩`, which generalizes `Bytes32`
+= `bytes⟨ 32 ⟩`), and `Encoding` implements their wire format (Bool as
+0/1, Byte and `Bytes(n)` packed little-endian in 31-byte chunks). The
+whole development still typechecks. The instruction set is still the
+3.0 one: the new types reach only the type-generic instructions (inputs,
+`copy`, `encode`, `cond-select`, `output`), and the 3.1 instructions are
+not modelled yet. The headline results below are stated for this
+mixed surface.
+
 Curve25519 is Edwards-form: its identity *has* affine coordinates,
 unlike the Weierstrass curves, so its coordinate extraction (`coordsC`)
 is total in the trust base (mirroring Jubjub's `coordsJ`) rather than
@@ -112,9 +123,9 @@ Assumptions → Types → Encoding → Syntax → Semantics → SemanticsPropert
 
 | Module | Contents |
 | --- | --- |
-| [`Assumptions.agda`](Assumptions.agda) | The trust base: carriers (`Fr`, `Alignment`, `JubjubPoint`, `JubjubScalar`, `Secp256k1Point`, `Secp256k1Base`, `Secp256k1Scalar`, `Secp256r1Point`, `Secp256r1Base`, `Secp256r1Scalar`, `Curve25519Point`, `Curve25519Base`, `Curve25519Scalar`; concrete `Byte`/`Bytes32`), field/curve/byte/hash/commitment operations (incl. the Secp256k1/Secp256r1 foreign-Weierstrass and Curve25519 foreign-Edwards chip contracts), the non-triviality law `1ᶠ≢0ᶠ`, the typed-encoding round-trip laws (Group C), and the derived valuation `valFr`. |
-| [`Types.agda`](Types.agda) | `IrType` (13 constructors), `IrValue`, `encoded-len`, `typeof`, decidable type equality — mirrors `ir_types.rs`. |
-| [`Encoding.agda`](Encoding.agda) | `encode`/`decode` between `IrValue` and `List Fr`, derived from the per-type trust-base primitives. |
+| [`Assumptions.agda`](Assumptions.agda) | The trust base: carriers (`Fr`, `Alignment`, `JubjubPoint`, `JubjubScalar`, `Secp256k1Point`, `Secp256k1Base`, `Secp256k1Scalar`, `Secp256r1Point`, `Secp256r1Base`, `Secp256r1Scalar`, `Curve25519Point`, `Curve25519Base`, `Curve25519Scalar`; concrete `Byte`/`Bytes32`), field/curve/byte/hash/commitment operations, the byte-chunk packing `packᶠ`/`unpackᶠ` (from which the Bytes32 low/high split and its round-trips are derived) (incl. the Secp256k1/Secp256r1 foreign-Weierstrass and Curve25519 foreign-Edwards chip contracts), the non-triviality law `1ᶠ≢0ᶠ`, the typed-encoding round-trip laws (Group C), and the derived valuation `valFr`. |
+| [`Types.agda`](Types.agda) | `IrType` (15 constructors, including the length-indexed `bytes⟨ n ⟩`), `IrValue`, the `Chunks` view and `encoded-len`, `typeof`, decidable type equality, the `ValidType` length bound — mirrors `ir_types.rs`. |
+| [`Encoding.agda`](Encoding.agda) | `encode`/`decode` between `IrValue` and `List Fr`, derived from the per-type trust-base primitives, and the round-trip lemmas for the Bool/Byte/`Bytes(n)` encodings. |
 | [`Syntax.agda`](Syntax.agda) | `Identifier`, `Operand`, the 34-variant `Instruction`, `IrSource` — mirrors `ir.rs`. |
 | [`Semantics.agda`](Semantics.agda) | The off-circuit interpreter: `step`/`run`/`init`/`preprocess` over the typed named-register state; `ProofPreimage`. |
 | [`SemanticsProperties.agda`](SemanticsProperties.agda) | Circuit-free consequences: store orders `_⊑_`/`_≼_`, freshness and domain lemmas, run inversion/extension, `Consumed`/`run-shaped`, and the `preprocess` inversions. |

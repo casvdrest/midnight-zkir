@@ -24,12 +24,13 @@ module zkir-v3.Assumptions where
 open import Data.Bool    using (Bool; if_then_else_)
 open import Data.Fin     using (Fin)
 open import Data.List    using (List; []; _∷_)
-open import Data.Maybe   using (Maybe; just)
-open import Data.Nat     using (ℕ; _+_; _*_)
+open import Data.Maybe   using (Maybe; just; _>>=_)
+open import Data.Nat     using (ℕ; zero; suc; _+_; _*_; _≤_; s≤s; z≤n)
 open import Data.Product using (_×_; _,_; uncurry)
-open import Data.Vec     using (Vec)
+open import Data.Vec     using (Vec; []; _∷_; _++_; take; drop)
 open import Relation.Binary.Definitions using (DecidableEquality)
-open import Relation.Binary.PropositionalEquality using (_≡_)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong₂; trans)
+open import Data.Nat.Properties using (≤-refl)
 open import Relation.Nullary using (¬_)
 
 -- Integer value of a little-endian bit list (used by the valuation `valFr`).
@@ -50,6 +51,26 @@ Byte = Fin 256
 
 Bytes32 : Set
 Bytes32 = Vec Byte 32
+
+-- Number of bytes packed into one native field element when encoding a
+-- `Bytes(n)` or `Byte` value (ir_types.rs: BYTES_PER_FIELD_ELEMENT).
+-- 31 bytes (248 bits) always fit below the BLS12-381 scalar modulus.
+BYTES-PER-FR : ℕ
+BYTES-PER-FR = 31
+
+-- `take`/`drop` invert `_++_` (local: the stdlib states only the
+-- converse, `take++drop≡id`).
+take-++ : ∀ {A : Set} m {n} (xs : Vec A m) (ys : Vec A n) → take m (xs ++ ys) ≡ xs
+take-++ zero    []       ys = refl
+take-++ (suc m) (x ∷ xs) ys = cong (x ∷_) (take-++ m xs ys)
+
+drop-++ : ∀ {A : Set} m {n} (xs : Vec A m) (ys : Vec A n) → drop m (xs ++ ys) ≡ ys
+drop-++ zero    []       ys = refl
+drop-++ (suc m) (x ∷ xs) ys = drop-++ m xs ys
+
+take++drop : ∀ {A : Set} m {n} (xs : Vec A (m + n)) → take m xs ++ drop m xs ≡ xs
+take++drop zero    xs       = refl
+take++drop (suc m) (x ∷ xs) = cong (x ∷_) (take++drop m xs)
 
 record Assumptions : Set₁ where
 
@@ -364,12 +385,21 @@ record Assumptions : Set₁ where
     nativeToBytes   : Fr → Bytes32
     nativeFromBytes : Bytes32 → Fr
 
-    -- The (low, high) decomposition shared by the Bytes32 encoding and
-    -- the Bytes32IntoLowHigh / Bytes32FromLowHigh instructions: `low` is
-    -- the first 31 bytes as a field element, `high` the 32nd byte.
-    -- `low-high→bytes32` is partial (requires low < 2²⁴⁸ and high < 256).
-    bytes32→low-high : Bytes32 → Fr × Fr
-    low-high→bytes32 : Fr → Fr → Maybe Bytes32
+  ----------------------------------------------------------------------
+  -- Byte-chunk packing (the encoding of `Byte` and `Bytes(n)`).
+  --
+  -- `packᶠ` reads a short byte string as a little-endian integer and
+  -- embeds it in Fr (encode.rs: `F::from_bytes_le` on a zero-padded
+  -- chunk of at most BYTES-PER-FR = 31 bytes; `AssignedByte::
+  -- as_public_input` for a single `Byte`).  `unpackᶠ k` is its partial
+  -- inverse on k-byte chunks: it fails unless the element is below
+  -- 2^(8k), i.e. unless its bytes above position k are zero (encode.rs:
+  -- the canonicity check of `decode_bytes`).
+  ----------------------------------------------------------------------
+
+  field
+    packᶠ   : ∀ {k} → Vec Byte k → Fr
+    unpackᶠ : (k : ℕ) → Fr → Maybe (Vec Byte k)
 
   ----------------------------------------------------------------------
   -- Hashing and the communications commitment.
@@ -439,10 +469,11 @@ record Assumptions : Set₁ where
     jubjubScalar-sound : ∀ {f s}
       → jubjubScalarFromFr f ≡ just s → jubjubScalarToFr s ≡ f
 
-    bytes32-round : ∀ b
-      → uncurry low-high→bytes32 (bytes32→low-high b) ≡ just b
-    bytes32-sound : ∀ {lo hi b}
-      → low-high→bytes32 lo hi ≡ just b → bytes32→low-high b ≡ (lo , hi)
+    -- Packing round-trips on chunks of at most BYTES-PER-FR bytes.
+    pack-round : ∀ {k} (bs : Vec Byte k) → k ≤ BYTES-PER-FR
+      → unpackᶠ k (packᶠ bs) ≡ just bs
+    pack-sound : ∀ {k x} {bs : Vec Byte k}
+      → unpackᶠ k x ≡ just bs → packᶠ bs ≡ x
 
     secp256k1Base-round : ∀ x
       → uncurry limbs→secp256k1Base (secp256k1Base→limbs x) ≡ just x
@@ -508,3 +539,38 @@ record Assumptions : Set₁ where
     -- wire-encoding goes through limbs, with its own round-trip laws
     -- above, so — unlike Jubjub, whose point encoding IS its coordinate
     -- pair — the coordinate functions never need to compose).
+
+  ----------------------------------------------------------------------
+  -- The Bytes32 (low, high) decomposition, derived from the chunk
+  -- packing above.
+  --
+  -- Shared by the `Bytes(32)` encoding (the chunking of `Bytes(n)` at
+  -- n = 32: the first 31 bytes, then the 32nd) and by the
+  -- Bytes32IntoLowHigh / Bytes32FromLowHigh instructions.
+  -- `low-high→bytes32` is partial (requires low < 2²⁴⁸ and high < 256).
+  -- These were trust-base fields before `Bytes(n)`; they are now
+  -- definitions, and their round-trip laws are lemmas.
+  ----------------------------------------------------------------------
+
+  bytes32→low-high : Bytes32 → Fr × Fr
+  bytes32→low-high b = packᶠ (take 31 b) , packᶠ (drop 31 b)
+
+  low-high→bytes32 : Fr → Fr → Maybe Bytes32
+  low-high→bytes32 lo hi =
+    unpackᶠ 31 lo >>= λ l →
+    unpackᶠ 1  hi >>= λ h →
+    just (l ++ h)
+
+  bytes32-round : ∀ b
+    → uncurry low-high→bytes32 (bytes32→low-high b) ≡ just b
+  bytes32-round b
+    rewrite pack-round (take 31 {1} b) ≤-refl
+          | pack-round (drop 31 {1} b) (s≤s z≤n)
+    = cong just (take++drop 31 b)
+
+  bytes32-sound : ∀ {lo hi b}
+    → low-high→bytes32 lo hi ≡ just b → bytes32→low-high b ≡ (lo , hi)
+  bytes32-sound {lo} {hi} eq with unpackᶠ 31 lo in e₁ | unpackᶠ 1 hi in e₂
+  bytes32-sound {lo} {hi} refl | just l | just h =
+    cong₂ _,_ (trans (cong packᶠ (take-++ 31 l h)) (pack-sound e₁))
+              (trans (cong packᶠ (drop-++ 31 l h)) (pack-sound e₂))

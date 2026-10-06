@@ -1573,7 +1573,7 @@ bytes32-into-low-high-bwd {P} {S} {st} {bytes} {loid} {hiid} {v₁} {v₂}
   fl fh loid≢hiid (b , rb) (bs , lo , hi , ⊢b , esplit , ⊢lo , ⊢hi)
   with ⊢-back2 P st loid v₁ hiid v₂ bytes fl fh
          (λ h≡l → loid≢hiid (sym h≡l)) rb ⊢b
-... | refl rewrite rb | esplit =
+... | refl with refl ← esplit rewrite rb =
       cong₂ (λ z₁ z₂ → just (out1 (out1 st loid z₁) hiid z₂))
         (out-val-inner P st loid v₁ hiid v₂ loid≢hiid ⊢lo)
         (out-val-outer P st loid v₁ hiid v₂ ⊢hi)

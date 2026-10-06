@@ -87,7 +87,9 @@ to𝔹 x with x ≟ᶠ 0ᶠ
 -- zero out of the trust base); `K256::default()` is the identity.
 default-val : IrType → IrValue
 default-val native           = val-native 0ᶠ
-default-val bytes32          = val-bytes32 (tabulate (λ _ → F.zero))
+default-val bool             = val-bool false
+default-val byte             = val-byte F.zero
+default-val (bytes⟨ n ⟩)     = val-bytes n (tabulate (λ _ → F.zero))
 default-val jubjub-point     = val-jubjub-point idJ
 default-val jubjub-scalar    = val-jubjub-scalar (native→jubjubScalar 0ᶠ)
 default-val secp256k1-point       = val-secp256k1-point idK1

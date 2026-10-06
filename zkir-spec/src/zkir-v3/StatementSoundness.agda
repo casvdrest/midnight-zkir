@@ -82,6 +82,8 @@ open import Relation.Nullary using (¬_; yes; no; Dec)
 open import Relation.Nullary.Decidable using (isYes; map′; _×-dec_)
 open import Data.Maybe.Properties using (just-injective; ≡-dec)
 open import Function using (case_of_)
+import Data.Fin.Properties as FinP
+import Data.Vec.Properties as VecP
 open import Data.Nat using (ℕ; zero; suc; _+_; _*_; _^_; _∸_; _<_; _<?_)
                      renaming (_≟_ to _≟ℕ_)
 
@@ -2155,7 +2157,7 @@ bytes32-into-low-high-step : ∀ {P S st bytes loid hiid b lo hi}
   → bytes32→low-high b ≡ (lo , hi)
   → step P S st (bytes32-into-low-high bytes (loid , hiid))
       ≡ just (out1 (out1 st loid (val-native lo)) hiid (val-native hi))
-bytes32-into-low-high-step rb bl rewrite rb | bl = refl
+bytes32-into-low-high-step rb refl rewrite rb = refl
 
 bytes32-from-low-high-step : ∀ {P S st loop hiop out lo hi b}
   → resolveᶠ (State.mem st) loop ≡ just lo
@@ -2268,8 +2270,9 @@ constrain-to-boolean-step rv rewrite rv = refl
 encode-len : ∀ v → length (encodeᵉ v) ≡ encoded-len (typeof v)
 encode-len (val-native _)            = refl
 encode-len (val-jubjub-scalar _)     = refl
-encode-len (val-bytes32 b)           with bytes32→low-high b
-... | (_ , _) = refl
+encode-len (val-bool _)              = refl
+encode-len (val-byte _)              = refl
+encode-len (val-bytes n b)           = bytes-len n b
 encode-len (val-jubjub-point p)      with coordsJ p
 ... | (_ , _) = refl
 encode-len (val-secp256k1-base x)         with secp256k1Base→limbs x
@@ -2294,10 +2297,9 @@ encode-len (val-curve25519-point p)  with curve25519Point→limbs p
 encode-decode : ∀ v → decode (typeof v) (encodeᵉ v) ≡ just v
 encode-decode (val-native x)            = refl
 encode-decode (val-jubjub-scalar s) rewrite jubjubScalar-round s = refl
-encode-decode (val-bytes32 b)           with bytes32→low-high b in beq
-... | (lo , hi)
-  rewrite trans (cong (uncurry low-high→bytes32) (sym beq)) (bytes32-round b)
-  = refl
+encode-decode (val-bool b)              rewrite bool-round b = refl
+encode-decode (val-byte b)              = byte-round b
+encode-decode (val-bytes n b)           rewrite bytes-round n b = refl
 encode-decode (val-jubjub-point p)      with coordsJ p in ceq
 ... | (x , y)
   rewrite trans (cong (uncurry fromCoordsJ) (sym ceq)) (coordsJ-fromCoordsJ p)
@@ -2455,195 +2457,52 @@ WShape S w = WInputs w (IrSource.inputs S) × WSteps S w (IrSource.instructions 
 -- `DecidableEquality`, but `jubjubScalarToFr` is injective (its left
 -- inverse is `jubjubScalarFromFr`, by `jubjubScalar-round`), so scalar
 -- equality reduces to `_≟ᶠ_` on the images.
+-- Values of distinct types are distinct, so only like-typed pairs need a
+-- comparison; `same` covers exactly those (its type-equality argument
+-- rules out the others).
+private
+  same : ∀ v w → typeof v ≡ typeof w → Dec (v ≡ w)
+  same (val-native x) (val-native y) _ =
+    map′ (cong val-native) (λ { refl → refl }) (x ≟ᶠ y)
+  same (val-jubjub-point p) (val-jubjub-point q) _ =
+    map′ (cong val-jubjub-point) (λ { refl → refl }) (p ≟J q)
+  same (val-jubjub-scalar s) (val-jubjub-scalar t) _ =
+    map′ (λ e → cong val-jubjub-scalar (sc-inj e)) (λ { refl → refl })
+         (jubjubScalarToFr s ≟ᶠ jubjubScalarToFr t)
+    where
+      sc-inj : jubjubScalarToFr s ≡ jubjubScalarToFr t → s ≡ t
+      sc-inj e = just-injective
+        (trans (sym (jubjubScalar-round s))
+          (trans (cong jubjubScalarFromFr e) (jubjubScalar-round t)))
+  same (val-secp256k1-point p) (val-secp256k1-point q) _ =
+    map′ (cong val-secp256k1-point) (λ { refl → refl }) (p ≟K1 q)
+  same (val-secp256k1-base x) (val-secp256k1-base y) _ =
+    map′ (cong val-secp256k1-base) (λ { refl → refl }) (x ≟K1ᵇ y)
+  same (val-secp256k1-scalar x) (val-secp256k1-scalar y) _ =
+    map′ (cong val-secp256k1-scalar) (λ { refl → refl }) (x ≟K1ˢ y)
+  same (val-secp256r1-point p) (val-secp256r1-point q) _ =
+    map′ (cong val-secp256r1-point) (λ { refl → refl }) (p ≟P q)
+  same (val-secp256r1-base x) (val-secp256r1-base y) _ =
+    map′ (cong val-secp256r1-base) (λ { refl → refl }) (x ≟Pᵇ y)
+  same (val-secp256r1-scalar x) (val-secp256r1-scalar y) _ =
+    map′ (cong val-secp256r1-scalar) (λ { refl → refl }) (x ≟Pˢ y)
+  same (val-curve25519-point p) (val-curve25519-point q) _ =
+    map′ (cong val-curve25519-point) (λ { refl → refl }) (p ≟C q)
+  same (val-curve25519-base x) (val-curve25519-base y) _ =
+    map′ (cong val-curve25519-base) (λ { refl → refl }) (x ≟Cᵇ y)
+  same (val-curve25519-scalar x) (val-curve25519-scalar y) _ =
+    map′ (cong val-curve25519-scalar) (λ { refl → refl }) (x ≟Cˢ y)
+  same (val-bool a) (val-bool b) _ =
+    map′ (cong val-bool) (λ { refl → refl }) (a ≟𝔹 b)
+  same (val-byte a) (val-byte b) _ =
+    map′ (cong val-byte) (λ { refl → refl }) (a FinP.≟ b)
+  same (val-bytes n a) (val-bytes .n b) refl =
+    map′ (cong (val-bytes n)) (λ { refl → refl }) (VecP.≡-dec FinP._≟_ a b)
+
 _≟V_ : DecidableEquality IrValue
-val-native x ≟V val-native y =
-  map′ (cong val-native) (λ { refl → refl }) (x ≟ᶠ y)
-val-native _ ≟V val-bytes32 _                    = no λ ()
-val-native _ ≟V val-jubjub-point _               = no λ ()
-val-native _ ≟V val-jubjub-scalar _              = no λ ()
-val-bytes32 _ ≟V val-native _                    = no λ ()
-val-bytes32 a ≟V val-bytes32 b =
-  map′ (cong val-bytes32) (λ { refl → refl }) (a ≟B b)
-val-bytes32 _ ≟V val-jubjub-point _              = no λ ()
-val-bytes32 _ ≟V val-jubjub-scalar _             = no λ ()
-val-jubjub-point _ ≟V val-native _               = no λ ()
-val-jubjub-point _ ≟V val-bytes32 _              = no λ ()
-val-jubjub-point p ≟V val-jubjub-point q =
-  map′ (cong val-jubjub-point) (λ { refl → refl }) (p ≟J q)
-val-jubjub-point _ ≟V val-jubjub-scalar _        = no λ ()
-val-jubjub-scalar _ ≟V val-native _              = no λ ()
-val-jubjub-scalar _ ≟V val-bytes32 _             = no λ ()
-val-jubjub-scalar _ ≟V val-jubjub-point _        = no λ ()
-val-jubjub-scalar s ≟V val-jubjub-scalar t =
-  map′ (λ e → cong val-jubjub-scalar (sc-inj e)) (λ { refl → refl })
-       (jubjubScalarToFr s ≟ᶠ jubjubScalarToFr t)
-  where
-    sc-inj : jubjubScalarToFr s ≡ jubjubScalarToFr t → s ≡ t
-    sc-inj e = just-injective
-      (trans (sym (jubjubScalar-round s))
-        (trans (cong jubjubScalarFromFr e) (jubjubScalar-round t)))
-val-native _ ≟V val-secp256k1-point _                 = no λ ()
-val-native _ ≟V val-secp256k1-base _                  = no λ ()
-val-native _ ≟V val-secp256k1-scalar _                = no λ ()
-val-bytes32 _ ≟V val-secp256k1-point _                = no λ ()
-val-bytes32 _ ≟V val-secp256k1-base _                 = no λ ()
-val-bytes32 _ ≟V val-secp256k1-scalar _               = no λ ()
-val-jubjub-point _ ≟V val-secp256k1-point _           = no λ ()
-val-jubjub-point _ ≟V val-secp256k1-base _            = no λ ()
-val-jubjub-point _ ≟V val-secp256k1-scalar _          = no λ ()
-val-jubjub-scalar _ ≟V val-secp256k1-point _          = no λ ()
-val-jubjub-scalar _ ≟V val-secp256k1-base _           = no λ ()
-val-jubjub-scalar _ ≟V val-secp256k1-scalar _         = no λ ()
-val-native _ ≟V val-secp256r1-point _            = no λ ()
-val-native _ ≟V val-secp256r1-base _             = no λ ()
-val-native _ ≟V val-secp256r1-scalar _           = no λ ()
-val-bytes32 _ ≟V val-secp256r1-point _           = no λ ()
-val-bytes32 _ ≟V val-secp256r1-base _            = no λ ()
-val-bytes32 _ ≟V val-secp256r1-scalar _          = no λ ()
-val-jubjub-point _ ≟V val-secp256r1-point _      = no λ ()
-val-jubjub-point _ ≟V val-secp256r1-base _       = no λ ()
-val-jubjub-point _ ≟V val-secp256r1-scalar _     = no λ ()
-val-jubjub-scalar _ ≟V val-secp256r1-point _     = no λ ()
-val-jubjub-scalar _ ≟V val-secp256r1-base _      = no λ ()
-val-jubjub-scalar _ ≟V val-secp256r1-scalar _    = no λ ()
-val-secp256k1-point _ ≟V val-native _                 = no λ ()
-val-secp256k1-point _ ≟V val-bytes32 _                = no λ ()
-val-secp256k1-point _ ≟V val-jubjub-point _           = no λ ()
-val-secp256k1-point _ ≟V val-jubjub-scalar _          = no λ ()
-val-secp256k1-point p ≟V val-secp256k1-point q =
-  map′ (cong val-secp256k1-point) (λ { refl → refl }) (p ≟K1 q)
-val-secp256k1-point _ ≟V val-secp256k1-base _              = no λ ()
-val-secp256k1-point _ ≟V val-secp256k1-scalar _            = no λ ()
-val-secp256k1-point _ ≟V val-secp256r1-point _        = no λ ()
-val-secp256k1-point _ ≟V val-secp256r1-base _         = no λ ()
-val-secp256k1-point _ ≟V val-secp256r1-scalar _       = no λ ()
-val-secp256k1-base _ ≟V val-native _                  = no λ ()
-val-secp256k1-base _ ≟V val-bytes32 _                 = no λ ()
-val-secp256k1-base _ ≟V val-jubjub-point _            = no λ ()
-val-secp256k1-base _ ≟V val-jubjub-scalar _           = no λ ()
-val-secp256k1-base _ ≟V val-secp256k1-point _              = no λ ()
-val-secp256k1-base x ≟V val-secp256k1-base y =
-  map′ (cong val-secp256k1-base) (λ { refl → refl }) (x ≟K1ᵇ y)
-val-secp256k1-base _ ≟V val-secp256k1-scalar _             = no λ ()
-val-secp256k1-base _ ≟V val-secp256r1-point _         = no λ ()
-val-secp256k1-base _ ≟V val-secp256r1-base _          = no λ ()
-val-secp256k1-base _ ≟V val-secp256r1-scalar _        = no λ ()
-val-secp256k1-scalar _ ≟V val-native _                = no λ ()
-val-secp256k1-scalar _ ≟V val-bytes32 _               = no λ ()
-val-secp256k1-scalar _ ≟V val-jubjub-point _          = no λ ()
-val-secp256k1-scalar _ ≟V val-jubjub-scalar _         = no λ ()
-val-secp256k1-scalar _ ≟V val-secp256k1-point _            = no λ ()
-val-secp256k1-scalar _ ≟V val-secp256k1-base _             = no λ ()
-val-secp256k1-scalar x ≟V val-secp256k1-scalar y =
-  map′ (cong val-secp256k1-scalar) (λ { refl → refl }) (x ≟K1ˢ y)
-val-secp256k1-scalar _ ≟V val-secp256r1-point _       = no λ ()
-val-secp256k1-scalar _ ≟V val-secp256r1-base _        = no λ ()
-val-secp256k1-scalar _ ≟V val-secp256r1-scalar _      = no λ ()
-val-secp256r1-point _ ≟V val-native _            = no λ ()
-val-secp256r1-point _ ≟V val-bytes32 _           = no λ ()
-val-secp256r1-point _ ≟V val-jubjub-point _      = no λ ()
-val-secp256r1-point _ ≟V val-jubjub-scalar _     = no λ ()
-val-secp256r1-point _ ≟V val-secp256k1-point _        = no λ ()
-val-secp256r1-point _ ≟V val-secp256k1-base _         = no λ ()
-val-secp256r1-point _ ≟V val-secp256k1-scalar _       = no λ ()
-val-secp256r1-point p ≟V val-secp256r1-point q =
-  map′ (cong val-secp256r1-point) (λ { refl → refl }) (p ≟P q)
-val-secp256r1-point _ ≟V val-secp256r1-base _    = no λ ()
-val-secp256r1-point _ ≟V val-secp256r1-scalar _  = no λ ()
-val-secp256r1-base _ ≟V val-native _             = no λ ()
-val-secp256r1-base _ ≟V val-bytes32 _            = no λ ()
-val-secp256r1-base _ ≟V val-jubjub-point _       = no λ ()
-val-secp256r1-base _ ≟V val-jubjub-scalar _      = no λ ()
-val-secp256r1-base _ ≟V val-secp256k1-point _         = no λ ()
-val-secp256r1-base _ ≟V val-secp256k1-base _          = no λ ()
-val-secp256r1-base _ ≟V val-secp256k1-scalar _        = no λ ()
-val-secp256r1-base _ ≟V val-secp256r1-point _    = no λ ()
-val-secp256r1-base x ≟V val-secp256r1-base y =
-  map′ (cong val-secp256r1-base) (λ { refl → refl }) (x ≟Pᵇ y)
-val-secp256r1-base _ ≟V val-secp256r1-scalar _   = no λ ()
-val-secp256r1-scalar _ ≟V val-native _           = no λ ()
-val-secp256r1-scalar _ ≟V val-bytes32 _          = no λ ()
-val-secp256r1-scalar _ ≟V val-jubjub-point _     = no λ ()
-val-secp256r1-scalar _ ≟V val-jubjub-scalar _    = no λ ()
-val-secp256r1-scalar _ ≟V val-secp256k1-point _       = no λ ()
-val-secp256r1-scalar _ ≟V val-secp256k1-base _        = no λ ()
-val-secp256r1-scalar _ ≟V val-secp256k1-scalar _      = no λ ()
-val-secp256r1-scalar _ ≟V val-secp256r1-point _  = no λ ()
-val-secp256r1-scalar _ ≟V val-secp256r1-base _   = no λ ()
-val-secp256r1-scalar x ≟V val-secp256r1-scalar y =
-  map′ (cong val-secp256r1-scalar) (λ { refl → refl }) (x ≟Pˢ y)
-val-native _ ≟V val-curve25519-point _            = no λ ()
-val-native _ ≟V val-curve25519-base _             = no λ ()
-val-native _ ≟V val-curve25519-scalar _           = no λ ()
-val-bytes32 _ ≟V val-curve25519-point _           = no λ ()
-val-bytes32 _ ≟V val-curve25519-base _            = no λ ()
-val-bytes32 _ ≟V val-curve25519-scalar _          = no λ ()
-val-jubjub-point _ ≟V val-curve25519-point _      = no λ ()
-val-jubjub-point _ ≟V val-curve25519-base _       = no λ ()
-val-jubjub-point _ ≟V val-curve25519-scalar _     = no λ ()
-val-jubjub-scalar _ ≟V val-curve25519-point _     = no λ ()
-val-jubjub-scalar _ ≟V val-curve25519-base _      = no λ ()
-val-jubjub-scalar _ ≟V val-curve25519-scalar _    = no λ ()
-val-secp256k1-point _ ≟V val-curve25519-point _        = no λ ()
-val-secp256k1-point _ ≟V val-curve25519-base _         = no λ ()
-val-secp256k1-point _ ≟V val-curve25519-scalar _       = no λ ()
-val-secp256k1-base _ ≟V val-curve25519-point _         = no λ ()
-val-secp256k1-base _ ≟V val-curve25519-base _          = no λ ()
-val-secp256k1-base _ ≟V val-curve25519-scalar _        = no λ ()
-val-secp256k1-scalar _ ≟V val-curve25519-point _       = no λ ()
-val-secp256k1-scalar _ ≟V val-curve25519-base _        = no λ ()
-val-secp256k1-scalar _ ≟V val-curve25519-scalar _      = no λ ()
-val-secp256r1-point _ ≟V val-curve25519-point _   = no λ ()
-val-secp256r1-point _ ≟V val-curve25519-base _    = no λ ()
-val-secp256r1-point _ ≟V val-curve25519-scalar _  = no λ ()
-val-secp256r1-base _ ≟V val-curve25519-point _    = no λ ()
-val-secp256r1-base _ ≟V val-curve25519-base _     = no λ ()
-val-secp256r1-base _ ≟V val-curve25519-scalar _   = no λ ()
-val-secp256r1-scalar _ ≟V val-curve25519-point _  = no λ ()
-val-secp256r1-scalar _ ≟V val-curve25519-base _   = no λ ()
-val-secp256r1-scalar _ ≟V val-curve25519-scalar _ = no λ ()
-val-curve25519-point _ ≟V val-native _            = no λ ()
-val-curve25519-point _ ≟V val-bytes32 _           = no λ ()
-val-curve25519-point _ ≟V val-jubjub-point _      = no λ ()
-val-curve25519-point _ ≟V val-jubjub-scalar _     = no λ ()
-val-curve25519-point _ ≟V val-secp256k1-point _        = no λ ()
-val-curve25519-point _ ≟V val-secp256k1-base _         = no λ ()
-val-curve25519-point _ ≟V val-secp256k1-scalar _       = no λ ()
-val-curve25519-point _ ≟V val-secp256r1-point _   = no λ ()
-val-curve25519-point _ ≟V val-secp256r1-base _    = no λ ()
-val-curve25519-point _ ≟V val-secp256r1-scalar _  = no λ ()
-val-curve25519-point p ≟V val-curve25519-point q =
-  map′ (cong val-curve25519-point) (λ { refl → refl }) (p ≟C q)
-val-curve25519-point _ ≟V val-curve25519-base _   = no λ ()
-val-curve25519-point _ ≟V val-curve25519-scalar _ = no λ ()
-val-curve25519-base _ ≟V val-native _             = no λ ()
-val-curve25519-base _ ≟V val-bytes32 _            = no λ ()
-val-curve25519-base _ ≟V val-jubjub-point _       = no λ ()
-val-curve25519-base _ ≟V val-jubjub-scalar _      = no λ ()
-val-curve25519-base _ ≟V val-secp256k1-point _         = no λ ()
-val-curve25519-base _ ≟V val-secp256k1-base _          = no λ ()
-val-curve25519-base _ ≟V val-secp256k1-scalar _        = no λ ()
-val-curve25519-base _ ≟V val-secp256r1-point _    = no λ ()
-val-curve25519-base _ ≟V val-secp256r1-base _     = no λ ()
-val-curve25519-base _ ≟V val-secp256r1-scalar _   = no λ ()
-val-curve25519-base _ ≟V val-curve25519-point _   = no λ ()
-val-curve25519-base x ≟V val-curve25519-base y =
-  map′ (cong val-curve25519-base) (λ { refl → refl }) (x ≟Cᵇ y)
-val-curve25519-base _ ≟V val-curve25519-scalar _  = no λ ()
-val-curve25519-scalar _ ≟V val-native _           = no λ ()
-val-curve25519-scalar _ ≟V val-bytes32 _          = no λ ()
-val-curve25519-scalar _ ≟V val-jubjub-point _     = no λ ()
-val-curve25519-scalar _ ≟V val-jubjub-scalar _    = no λ ()
-val-curve25519-scalar _ ≟V val-secp256k1-point _       = no λ ()
-val-curve25519-scalar _ ≟V val-secp256k1-base _        = no λ ()
-val-curve25519-scalar _ ≟V val-secp256k1-scalar _      = no λ ()
-val-curve25519-scalar _ ≟V val-secp256r1-point _  = no λ ()
-val-curve25519-scalar _ ≟V val-secp256r1-base _   = no λ ()
-val-curve25519-scalar _ ≟V val-secp256r1-scalar _ = no λ ()
-val-curve25519-scalar _ ≟V val-curve25519-point _ = no λ ()
-val-curve25519-scalar _ ≟V val-curve25519-base _  = no λ ()
-val-curve25519-scalar x ≟V val-curve25519-scalar y =
-  map′ (cong val-curve25519-scalar) (λ { refl → refl }) (x ≟Cˢ y)
+v ≟V w with typeof v ≟T typeof w
+... | no  t≢ = no (λ v≡w → t≢ (cong typeof v≡w))
+... | yes t≡ = same v w t≡
 
 -- `mx` is defined.
 defined? : ∀ {A : Set} (mx : Maybe A) → Dec (∃ λ x → mx ≡ just x)
@@ -3188,7 +3047,9 @@ resolveᶜ-Fr≡resolveᶠᵐ : ∀ w op
 resolveᶜ-Fr≡resolveᶠᵐ w (var id) with CircuitWitness.assign w id
 ... | nothing                       = refl
 ... | just (val-native _)           = refl
-... | just (val-bytes32 _)          = refl
+... | just (val-bool _)          = refl
+... | just (val-byte _)          = refl
+... | just (val-bytes _ _)        = refl
 ... | just (val-jubjub-point _)     = refl
 ... | just (val-jubjub-scalar _)    = refl
 ... | just (val-secp256k1-point _)       = refl
@@ -3327,7 +3188,31 @@ from-bytes32-realize {P' = P'} {S} {w} {st} {bytes} {val-t = curve25519-scalar}
   , from-bytes32-curve25519-scalar-step {P'} {S} {st} {bytes} {o} {bs} rb
   , agree-from-bytes-curve25519-scalar {State.mem st} {w} {bytes} {o} {bs} {v}
       sub rb hc wo tv
-from-bytes32-realize {w = w} {bytes = bytes} {val-t = bytes32} {o = o}
+from-bytes32-realize {w = w} {bytes = bytes} {val-t = bool} {o = o}
+  sub rb hc (v , wo , tv) =
+  case from-bytes-out-typeof {w} {o} {bytes} {v} hc wo of λ
+    { (inj₁ tn)                              → case trans (sym tn) tv of λ ()
+    ; (inj₂ (inj₁ tb))                       → case trans (sym tb) tv of λ ()
+    ; (inj₂ (inj₂ (inj₁ ts)))                → case trans (sym ts) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₁ trb))))        → case trans (sym trb) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₂ (inj₁ trs))))) → case trans (sym trs) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (inj₁ tcb))))))
+        → case trans (sym tcb) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ tcs))))))
+        → case trans (sym tcs) tv of λ () }
+from-bytes32-realize {w = w} {bytes = bytes} {val-t = byte} {o = o}
+  sub rb hc (v , wo , tv) =
+  case from-bytes-out-typeof {w} {o} {bytes} {v} hc wo of λ
+    { (inj₁ tn)                              → case trans (sym tn) tv of λ ()
+    ; (inj₂ (inj₁ tb))                       → case trans (sym tb) tv of λ ()
+    ; (inj₂ (inj₂ (inj₁ ts)))                → case trans (sym ts) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₁ trb))))        → case trans (sym trb) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₂ (inj₁ trs))))) → case trans (sym trs) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (inj₁ tcb))))))
+        → case trans (sym tcb) tv of λ ()
+    ; (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ (inj₂ tcs))))))
+        → case trans (sym tcs) tv of λ () }
+from-bytes32-realize {w = w} {bytes = bytes} {val-t = bytes⟨ _ ⟩} {o = o}
   sub rb hc (v , wo , tv) =
   case from-bytes-out-typeof {w} {o} {bytes} {v} hc wo of λ
     { (inj₁ tn)                              → case trans (sym tn) tv of λ ()
@@ -5886,10 +5771,18 @@ wsteps-go {P} {S} {s} (from-bytes32 bytes native o ∷ is) st (of , wfr) req =
               (ins-here o (val-native n) (State.mem st)))
      , refl )
    , wsteps-go {P} {S} {s} is st-mid (wfr seq) rrest
-wsteps-go {P} {S} {s} (from-bytes32 bytes bytes32 o ∷ is) st (of , wfr) req =
+wsteps-go {P} {S} {s} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) o ∷ is) st (of , wfr) req =
   let (st-mid , seq , rrest) =
-        run-inv {P} {S} {s} (from-bytes32 bytes bytes32 o) is st req
-  in case step→bwd {P} {S} {st} {st-mid} (from-bytes32 bytes bytes32 o) seq of λ ()
+        run-inv {P} {S} {s} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) o) is st req
+  in case step→bwd {P} {S} {st} {st-mid} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) o) seq of λ ()
+wsteps-go {P} {S} {s} (from-bytes32 bytes bool o ∷ is) st (of , wfr) req =
+  let (st-mid , seq , rrest) =
+        run-inv {P} {S} {s} (from-bytes32 bytes bool o) is st req
+  in case step→bwd {P} {S} {st} {st-mid} (from-bytes32 bytes bool o) seq of λ ()
+wsteps-go {P} {S} {s} (from-bytes32 bytes byte o ∷ is) st (of , wfr) req =
+  let (st-mid , seq , rrest) =
+        run-inv {P} {S} {s} (from-bytes32 bytes byte o) is st req
+  in case step→bwd {P} {S} {st} {st-mid} (from-bytes32 bytes byte o) seq of λ ()
 wsteps-go {P} {S} {s} (from-bytes32 bytes jubjub-point o ∷ is) st (of , wfr) req =
   let (st-mid , seq , rrest) =
         run-inv {P} {S} {s} (from-bytes32 bytes jubjub-point o) is st req

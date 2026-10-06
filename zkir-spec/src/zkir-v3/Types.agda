@@ -10,23 +10,37 @@ open import zkir-v3.Assumptions
 
 module zkir-v3.Types (⋯ : _) (open Assumptions ⋯) where
 
+open import Data.Bool using (Bool)
 open import Data.Empty using (⊥)
 open import Data.List using (List; []; _∷_)
 open import Data.Maybe using (Maybe; just; nothing)
-open import Data.Nat using (ℕ)
+open import Data.Maybe.Properties using (just-injective)
+open import Data.Nat using (ℕ; zero; suc; _+_; _≤_; _≤?_; s≤s; z≤n)
+open import Data.Nat.Properties using (≤∧≢⇒<) renaming (_≟_ to _≟ℕ_)
 open import Data.Product using (_×_; _,_)
+open import Data.Product.Properties using (≡-dec)
 open import Data.Sum using (_⊎_)
+open import Data.Vec using (Vec)
 open import Relation.Binary.Definitions using (DecidableEquality)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl)
-open import Relation.Nullary using (yes; no)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong)
+open import Relation.Nullary using (yes; no; Dec)
+open import Relation.Nullary.Decidable using (map′; _×-dec_)
+open import Data.Unit using (⊤; tt)
 
 ------------------------------------------------------------------------
 -- Types  (ir_types.rs: IrType)
+--
+-- ZKIR 3.1 has fifteen types.  `bool` and `byte` are new in 3.1, and
+-- `bytes⟨ n ⟩` generalizes the 3.0 type `Bytes32`, which is `bytes⟨ 32 ⟩`
+-- (kept available as the pattern synonym `bytes32`).  The constructor
+-- order follows the Rust enum, not its binary discriminants.
 ------------------------------------------------------------------------
 
 data IrType : Set where
   native            : IrType   -- Scalar<BLS12-381>
-  bytes32           : IrType   -- Bytes<32>
+  bool              : IrType   -- Bool          (3.1)
+  byte              : IrType   -- Byte          (3.1)
+  bytes⟨_⟩          : ℕ → IrType   -- Bytes<n>  (3.1; Bytes<32> in 3.0)
   jubjub-point      : IrType   -- Point<Jubjub>
   jubjub-scalar     : IrType   -- Scalar<Jubjub>
   secp256k1-point        : IrType   -- Point<Secp256k1>
@@ -39,11 +53,93 @@ data IrType : Set where
   curve25519-base   : IrType   -- Base<Curve25519>
   curve25519-scalar : IrType   -- Scalar<Curve25519>
 
--- Number of raw Fr elements needed to encode a value of this type
--- (ir_types.rs: IrType::encoded_len).
+-- The ZKIR 3.0 type `Bytes<32>`.
+--
+-- 32 is spelled in constructor form: Agda refuses to match on a numeric
+-- literal above 20 when it has to expand it for unification (here, the
+-- length index of `val-bytes`), and the constructor form sidesteps that.
+-- It is definitionally equal to the literal 32.
+pattern ‵32 = suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (zero))))))))))))))))))))))))))))))))
+pattern bytes32 = bytes⟨ ‵32 ⟩
+
+------------------------------------------------------------------------
+-- Valid types.
+--
+-- The Rust parsers (JSON and binary) only produce `Bytes<n>` with
+-- 1 ≤ n ≤ MAX_BYTES_LEN = 2²⁴, so no source can mention another length.
+-- The model keeps `bytes⟨_⟩` total over ℕ and states the bound as a
+-- decidable predicate instead.  (Not yet part of the producer
+-- obligations: nothing downstream depends on it so far.)
+------------------------------------------------------------------------
+
+MAX-BYTES-LEN : ℕ
+MAX-BYTES-LEN = 16777216   -- 2²⁴ (ir_types.rs: MAX_BYTES_LEN)
+
+ValidType : IrType → Set
+ValidType (bytes⟨ n ⟩) = 1 ≤ n × n ≤ MAX-BYTES-LEN
+ValidType _         = ⊤
+
+valid-type? : ∀ t → Dec (ValidType t)
+valid-type? native            = yes tt
+valid-type? bool              = yes tt
+valid-type? byte              = yes tt
+valid-type? (bytes⟨ n ⟩)         = (1 ≤? n) ×-dec (n ≤? MAX-BYTES-LEN)
+valid-type? jubjub-point      = yes tt
+valid-type? jubjub-scalar     = yes tt
+valid-type? secp256k1-point   = yes tt
+valid-type? secp256k1-base    = yes tt
+valid-type? secp256k1-scalar  = yes tt
+valid-type? secp256r1-point   = yes tt
+valid-type? secp256r1-base    = yes tt
+valid-type? secp256r1-scalar  = yes tt
+valid-type? curve25519-point  = yes tt
+valid-type? curve25519-base   = yes tt
+valid-type? curve25519-scalar = yes tt
+
+------------------------------------------------------------------------
+-- Encoding widths  (ir_types.rs: IrType::encoded_len)
+------------------------------------------------------------------------
+
+-- The chunking of an n-byte string into BYTES-PER-FR-byte chunks, the
+-- last one shorter (ir_instructions/encode.rs: `bs.chunks(31)`), as a
+-- view on n.  `chunks n` computes it; for a closed n it normalizes to a
+-- closed view (e.g. `chunks 32 = more (last _ _)`, 31 bytes then 1), so
+-- the encoding of a `Bytes32` still computes to two field elements.
+data Chunks : ℕ → Set where
+  done : Chunks 0
+  last : ∀ {n} → 1 ≤ n → n ≤ BYTES-PER-FR → Chunks n
+  more : ∀ {n} → Chunks (suc n) → Chunks (BYTES-PER-FR + suc n)
+
+private
+  -- Chunks of n + 1 bytes, from the chunks of n bytes: append a byte to
+  -- the last chunk, opening a new one when it is full.
+  step : ∀ {n} → Chunks n → Chunks (suc n)
+  step done = last (s≤s z≤n) (s≤s z≤n)
+  step (last {n} _ n≤31) with n ≟ℕ BYTES-PER-FR
+  ... | yes refl = more (last (s≤s z≤n) (s≤s z≤n))
+  ... | no  n≢31 = last (s≤s z≤n) (≤∧≢⇒< n≤31 n≢31)
+  step (more c) = more (step c)
+
+chunks : ∀ n → Chunks n
+chunks zero    = done
+chunks (suc n) = step (chunks n)
+
+-- Number of chunks: ⌈n / 31⌉ (ir_types.rs:
+-- `n.div_ceil(BYTES_PER_FIELD_ELEMENT)`).
+count : ∀ {n} → Chunks n → ℕ
+count done       = 0
+count (last _ _) = 1
+count (more c)   = suc (count c)
+
+nb-chunks : ℕ → ℕ
+nb-chunks n = count (chunks n)
+
+-- Number of raw Fr elements needed to encode a value of this type.
 encoded-len : IrType → ℕ
 encoded-len native            = 1
-encoded-len bytes32           = 2
+encoded-len bool              = 1
+encoded-len byte              = 1
+encoded-len (bytes⟨ n ⟩)         = nb-chunks n
 encoded-len jubjub-point      = 2
 encoded-len jubjub-scalar     = 1
 encoded-len secp256k1-point        = 5
@@ -56,16 +152,26 @@ encoded-len curve25519-point  = 4
 encoded-len curve25519-base   = 2
 encoded-len curve25519-scalar = 2
 
+-- Bytes32 still takes two elements: 31 bytes, then 1.
+_ : encoded-len bytes32 ≡ 2
+_ = refl
+
+_ : nb-chunks 0 ≡ 0 × nb-chunks 31 ≡ 1 × nb-chunks 62 ≡ 2 × nb-chunks 63 ≡ 3
+_ = refl , refl , refl , refl
+
 ------------------------------------------------------------------------
 -- Off-circuit values  (ir_types.rs: IrValue)
 --
 -- Constructors carry the concrete carrier; they are named distinctly
--- from the `IrType` tags to avoid overloading.
+-- from the `IrType` tags to avoid overloading.  A `val-bytes` value carries
+-- its length, as the Rust `Vec<u8>` does at run time.
 ------------------------------------------------------------------------
 
 data IrValue : Set where
   val-native            : Fr               → IrValue
-  val-bytes32           : Bytes32          → IrValue
+  val-bool              : Bool             → IrValue
+  val-byte              : Byte             → IrValue
+  val-bytes             : (n : ℕ) → Vec Byte n → IrValue
   val-jubjub-point      : JubjubPoint      → IrValue
   val-jubjub-scalar     : JubjubScalar     → IrValue
   val-secp256k1-point        : Secp256k1Point        → IrValue
@@ -78,10 +184,15 @@ data IrValue : Set where
   val-curve25519-base   : Curve25519Base   → IrValue
   val-curve25519-scalar : Curve25519Scalar → IrValue
 
+-- A ZKIR 3.0 `Bytes32` value.
+pattern val-bytes32 b = val-bytes ‵32 b
+
 -- The type of a value  (ir_types.rs: IrValue::get_type).
 typeof : IrValue → IrType
 typeof (val-native            _) = native
-typeof (val-bytes32           _) = bytes32
+typeof (val-bool              _) = bool
+typeof (val-byte              _) = byte
+typeof (val-bytes           n _) = bytes⟨ n ⟩
 typeof (val-jubjub-point      _) = jubjub-point
 typeof (val-jubjub-scalar     _) = jubjub-scalar
 typeof (val-secp256k1-point        _) = secp256k1-point
@@ -94,184 +205,76 @@ typeof (val-curve25519-point  _) = curve25519-point
 typeof (val-curve25519-base   _) = curve25519-base
 typeof (val-curve25519-scalar _) = curve25519-scalar
 
+------------------------------------------------------------------------
 -- Decidable equality of types (used by the type checks of `cond-select`
 -- and the `output` terminator).
+--
+-- Decided through an injective code into ℕ × ℕ (constructor index,
+-- byte length), so the table does not grow quadratically with the
+-- number of types.  On closed types it still computes to `yes refl` /
+-- `no _`.
+------------------------------------------------------------------------
+
+private
+  code : IrType → ℕ × ℕ
+  code native            = 0  , 0
+  code bool              = 1  , 0
+  code byte              = 2  , 0
+  code (bytes⟨ n ⟩)         = 3  , n
+  code jubjub-point      = 4  , 0
+  code jubjub-scalar     = 5  , 0
+  code secp256k1-point   = 6  , 0
+  code secp256k1-base    = 7  , 0
+  code secp256k1-scalar  = 8  , 0
+  code secp256r1-point   = 9  , 0
+  code secp256r1-base    = 10 , 0
+  code secp256r1-scalar  = 11 , 0
+  code curve25519-point  = 12 , 0
+  code curve25519-base   = 13 , 0
+  code curve25519-scalar = 14 , 0
+
+  uncode : ℕ × ℕ → Maybe IrType
+  uncode (0  , _) = just native
+  uncode (1  , _) = just bool
+  uncode (2  , _) = just byte
+  uncode (3  , n) = just (bytes⟨ n ⟩)
+  uncode (4  , _) = just jubjub-point
+  uncode (5  , _) = just jubjub-scalar
+  uncode (6  , _) = just secp256k1-point
+  uncode (7  , _) = just secp256k1-base
+  uncode (8  , _) = just secp256k1-scalar
+  uncode (9  , _) = just secp256r1-point
+  uncode (10 , _) = just secp256r1-base
+  uncode (11 , _) = just secp256r1-scalar
+  uncode (12 , _) = just curve25519-point
+  uncode (13 , _) = just curve25519-base
+  uncode (14 , _) = just curve25519-scalar
+  uncode _        = nothing
+
+  uncode-code : ∀ t → uncode (code t) ≡ just t
+  uncode-code native            = refl
+  uncode-code bool              = refl
+  uncode-code byte              = refl
+  uncode-code (bytes⟨ n ⟩)         = refl
+  uncode-code jubjub-point      = refl
+  uncode-code jubjub-scalar     = refl
+  uncode-code secp256k1-point   = refl
+  uncode-code secp256k1-base    = refl
+  uncode-code secp256k1-scalar  = refl
+  uncode-code secp256r1-point   = refl
+  uncode-code secp256r1-base    = refl
+  uncode-code secp256r1-scalar  = refl
+  uncode-code curve25519-point  = refl
+  uncode-code curve25519-base   = refl
+  uncode-code curve25519-scalar = refl
+
+  code-injective : ∀ {t u} → code t ≡ code u → t ≡ u
+  code-injective {t} {u} eq =
+    just-injective (trans (sym (uncode-code t))
+                          (trans (cong uncode eq) (uncode-code u)))
+
 _≟T_ : DecidableEquality IrType
-native        ≟T native        = yes refl
-native        ≟T bytes32       = no (λ ())
-native        ≟T jubjub-point  = no (λ ())
-native        ≟T jubjub-scalar = no (λ ())
-native        ≟T secp256k1-point    = no (λ ())
-native        ≟T secp256k1-base     = no (λ ())
-native        ≟T secp256k1-scalar   = no (λ ())
-native        ≟T secp256r1-point  = no (λ ())
-native        ≟T secp256r1-base   = no (λ ())
-native        ≟T secp256r1-scalar = no (λ ())
-native        ≟T curve25519-point   = no (λ ())
-native        ≟T curve25519-base    = no (λ ())
-native        ≟T curve25519-scalar  = no (λ ())
-bytes32       ≟T native        = no (λ ())
-bytes32       ≟T bytes32       = yes refl
-bytes32       ≟T jubjub-point  = no (λ ())
-bytes32       ≟T jubjub-scalar = no (λ ())
-bytes32       ≟T secp256k1-point    = no (λ ())
-bytes32       ≟T secp256k1-base     = no (λ ())
-bytes32       ≟T secp256k1-scalar   = no (λ ())
-bytes32       ≟T secp256r1-point  = no (λ ())
-bytes32       ≟T secp256r1-base   = no (λ ())
-bytes32       ≟T secp256r1-scalar = no (λ ())
-bytes32       ≟T curve25519-point   = no (λ ())
-bytes32       ≟T curve25519-base    = no (λ ())
-bytes32       ≟T curve25519-scalar  = no (λ ())
-jubjub-point  ≟T native        = no (λ ())
-jubjub-point  ≟T bytes32       = no (λ ())
-jubjub-point  ≟T jubjub-point  = yes refl
-jubjub-point  ≟T jubjub-scalar = no (λ ())
-jubjub-point  ≟T secp256k1-point    = no (λ ())
-jubjub-point  ≟T secp256k1-base     = no (λ ())
-jubjub-point  ≟T secp256k1-scalar   = no (λ ())
-jubjub-point  ≟T secp256r1-point  = no (λ ())
-jubjub-point  ≟T secp256r1-base   = no (λ ())
-jubjub-point  ≟T secp256r1-scalar = no (λ ())
-jubjub-point  ≟T curve25519-point   = no (λ ())
-jubjub-point  ≟T curve25519-base    = no (λ ())
-jubjub-point  ≟T curve25519-scalar  = no (λ ())
-jubjub-scalar ≟T native        = no (λ ())
-jubjub-scalar ≟T bytes32       = no (λ ())
-jubjub-scalar ≟T jubjub-point  = no (λ ())
-jubjub-scalar ≟T jubjub-scalar = yes refl
-jubjub-scalar ≟T secp256k1-point    = no (λ ())
-jubjub-scalar ≟T secp256k1-base     = no (λ ())
-jubjub-scalar ≟T secp256k1-scalar   = no (λ ())
-jubjub-scalar ≟T secp256r1-point  = no (λ ())
-jubjub-scalar ≟T secp256r1-base   = no (λ ())
-jubjub-scalar ≟T secp256r1-scalar = no (λ ())
-jubjub-scalar ≟T curve25519-point   = no (λ ())
-jubjub-scalar ≟T curve25519-base    = no (λ ())
-jubjub-scalar ≟T curve25519-scalar  = no (λ ())
-secp256k1-point    ≟T native        = no (λ ())
-secp256k1-point    ≟T bytes32       = no (λ ())
-secp256k1-point    ≟T jubjub-point  = no (λ ())
-secp256k1-point    ≟T jubjub-scalar = no (λ ())
-secp256k1-point    ≟T secp256k1-point    = yes refl
-secp256k1-point    ≟T secp256k1-base     = no (λ ())
-secp256k1-point    ≟T secp256k1-scalar   = no (λ ())
-secp256k1-point    ≟T secp256r1-point  = no (λ ())
-secp256k1-point    ≟T secp256r1-base   = no (λ ())
-secp256k1-point    ≟T secp256r1-scalar = no (λ ())
-secp256k1-point    ≟T curve25519-point   = no (λ ())
-secp256k1-point    ≟T curve25519-base    = no (λ ())
-secp256k1-point    ≟T curve25519-scalar  = no (λ ())
-secp256k1-base     ≟T native        = no (λ ())
-secp256k1-base     ≟T bytes32       = no (λ ())
-secp256k1-base     ≟T jubjub-point  = no (λ ())
-secp256k1-base     ≟T jubjub-scalar = no (λ ())
-secp256k1-base     ≟T secp256k1-point    = no (λ ())
-secp256k1-base     ≟T secp256k1-base     = yes refl
-secp256k1-base     ≟T secp256k1-scalar   = no (λ ())
-secp256k1-base     ≟T secp256r1-point  = no (λ ())
-secp256k1-base     ≟T secp256r1-base   = no (λ ())
-secp256k1-base     ≟T secp256r1-scalar = no (λ ())
-secp256k1-base     ≟T curve25519-point   = no (λ ())
-secp256k1-base     ≟T curve25519-base    = no (λ ())
-secp256k1-base     ≟T curve25519-scalar  = no (λ ())
-secp256k1-scalar   ≟T native        = no (λ ())
-secp256k1-scalar   ≟T bytes32       = no (λ ())
-secp256k1-scalar   ≟T jubjub-point  = no (λ ())
-secp256k1-scalar   ≟T jubjub-scalar = no (λ ())
-secp256k1-scalar   ≟T secp256k1-point    = no (λ ())
-secp256k1-scalar   ≟T secp256k1-base     = no (λ ())
-secp256k1-scalar   ≟T secp256k1-scalar   = yes refl
-secp256k1-scalar   ≟T secp256r1-point  = no (λ ())
-secp256k1-scalar   ≟T secp256r1-base   = no (λ ())
-secp256k1-scalar   ≟T secp256r1-scalar = no (λ ())
-secp256k1-scalar   ≟T curve25519-point   = no (λ ())
-secp256k1-scalar   ≟T curve25519-base    = no (λ ())
-secp256k1-scalar   ≟T curve25519-scalar  = no (λ ())
-
-secp256r1-point  ≟T native           = no (λ ())
-secp256r1-point  ≟T bytes32          = no (λ ())
-secp256r1-point  ≟T jubjub-point     = no (λ ())
-secp256r1-point  ≟T jubjub-scalar    = no (λ ())
-secp256r1-point  ≟T secp256k1-point       = no (λ ())
-secp256r1-point  ≟T secp256k1-base        = no (λ ())
-secp256r1-point  ≟T secp256k1-scalar      = no (λ ())
-secp256r1-point  ≟T secp256r1-point  = yes refl
-secp256r1-point  ≟T secp256r1-base   = no (λ ())
-secp256r1-point  ≟T secp256r1-scalar = no (λ ())
-secp256r1-point   ≟T curve25519-point   = no (λ ())
-secp256r1-point   ≟T curve25519-base    = no (λ ())
-secp256r1-point   ≟T curve25519-scalar  = no (λ ())
-
-secp256r1-base   ≟T native           = no (λ ())
-secp256r1-base   ≟T bytes32          = no (λ ())
-secp256r1-base   ≟T jubjub-point     = no (λ ())
-secp256r1-base   ≟T jubjub-scalar    = no (λ ())
-secp256r1-base   ≟T secp256k1-point       = no (λ ())
-secp256r1-base   ≟T secp256k1-base        = no (λ ())
-secp256r1-base   ≟T secp256k1-scalar      = no (λ ())
-secp256r1-base   ≟T secp256r1-point  = no (λ ())
-secp256r1-base   ≟T secp256r1-base   = yes refl
-secp256r1-base   ≟T secp256r1-scalar = no (λ ())
-secp256r1-base    ≟T curve25519-point   = no (λ ())
-secp256r1-base    ≟T curve25519-base    = no (λ ())
-secp256r1-base    ≟T curve25519-scalar  = no (λ ())
-
-secp256r1-scalar ≟T native           = no (λ ())
-secp256r1-scalar ≟T bytes32          = no (λ ())
-secp256r1-scalar ≟T jubjub-point     = no (λ ())
-secp256r1-scalar ≟T jubjub-scalar    = no (λ ())
-secp256r1-scalar ≟T secp256k1-point       = no (λ ())
-secp256r1-scalar ≟T secp256k1-base        = no (λ ())
-secp256r1-scalar ≟T secp256k1-scalar      = no (λ ())
-secp256r1-scalar ≟T secp256r1-point  = no (λ ())
-secp256r1-scalar ≟T secp256r1-base   = no (λ ())
-secp256r1-scalar ≟T secp256r1-scalar = yes refl
-secp256r1-scalar  ≟T curve25519-point   = no (λ ())
-secp256r1-scalar  ≟T curve25519-base    = no (λ ())
-secp256r1-scalar  ≟T curve25519-scalar  = no (λ ())
-
-curve25519-point   ≟T native             = no (λ ())
-curve25519-point   ≟T bytes32            = no (λ ())
-curve25519-point   ≟T jubjub-point       = no (λ ())
-curve25519-point   ≟T jubjub-scalar      = no (λ ())
-curve25519-point   ≟T secp256k1-point         = no (λ ())
-curve25519-point   ≟T secp256k1-base          = no (λ ())
-curve25519-point   ≟T secp256k1-scalar        = no (λ ())
-curve25519-point   ≟T secp256r1-point    = no (λ ())
-curve25519-point   ≟T secp256r1-base     = no (λ ())
-curve25519-point   ≟T secp256r1-scalar   = no (λ ())
-curve25519-point   ≟T curve25519-point   = yes refl
-curve25519-point   ≟T curve25519-base    = no (λ ())
-curve25519-point   ≟T curve25519-scalar  = no (λ ())
-
-curve25519-base    ≟T native             = no (λ ())
-curve25519-base    ≟T bytes32            = no (λ ())
-curve25519-base    ≟T jubjub-point       = no (λ ())
-curve25519-base    ≟T jubjub-scalar      = no (λ ())
-curve25519-base    ≟T secp256k1-point         = no (λ ())
-curve25519-base    ≟T secp256k1-base          = no (λ ())
-curve25519-base    ≟T secp256k1-scalar        = no (λ ())
-curve25519-base    ≟T secp256r1-point    = no (λ ())
-curve25519-base    ≟T secp256r1-base     = no (λ ())
-curve25519-base    ≟T secp256r1-scalar   = no (λ ())
-curve25519-base    ≟T curve25519-point   = no (λ ())
-curve25519-base    ≟T curve25519-base    = yes refl
-curve25519-base    ≟T curve25519-scalar  = no (λ ())
-
-curve25519-scalar  ≟T native             = no (λ ())
-curve25519-scalar  ≟T bytes32            = no (λ ())
-curve25519-scalar  ≟T jubjub-point       = no (λ ())
-curve25519-scalar  ≟T jubjub-scalar      = no (λ ())
-curve25519-scalar  ≟T secp256k1-point         = no (λ ())
-curve25519-scalar  ≟T secp256k1-base          = no (λ ())
-curve25519-scalar  ≟T secp256k1-scalar        = no (λ ())
-curve25519-scalar  ≟T secp256r1-point    = no (λ ())
-curve25519-scalar  ≟T secp256r1-base     = no (λ ())
-curve25519-scalar  ≟T secp256r1-scalar   = no (λ ())
-curve25519-scalar  ≟T curve25519-point   = no (λ ())
-curve25519-scalar  ≟T curve25519-base    = no (λ ())
-curve25519-scalar  ≟T curve25519-scalar  = yes refl
+t ≟T u = map′ code-injective (cong code) (≡-dec _≟ℕ_ _≟ℕ_ (code t) (code u))
 
 ------------------------------------------------------------------------
 -- The elliptic-curve families that `ec-mul-generator`,

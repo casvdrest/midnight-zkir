@@ -392,7 +392,13 @@ step-extends {st = st} (into-bytes32 input output) e fresh
 step-extends {st = st} (from-bytes32 bytes native output) e fresh
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) with refl ← e = ≼-refl , out1-⊑ st output _ fresh
-step-extends {st = st} (from-bytes32 bytes bytes32 output) e _
+step-extends {st = st} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output) e _
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-extends {st = st} (from-bytes32 bytes bool output) e _
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-extends {st = st} (from-bytes32 bytes byte output) e _
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) = case e of λ ()
 step-extends {st = st} (from-bytes32 bytes jubjub-point output) e _
@@ -434,11 +440,9 @@ step-extends {st = st} (reverse-bytes bytes output) e fresh
 step-extends {st = st} (bytes32-into-low-high bytes (loid , hiid)) e
   (freshl , freshh , loid≢hiid)
   with resolve (State.mem st) bytes
-... | just (val-bytes32 b) with bytes32→low-high b
-...   | (lo , hi) with refl ← e =
+... | just (val-bytes32 b) with refl ← e =
           ≼-refl
-        , out2-⊑ st loid (val-native lo) hiid (val-native hi)
-            freshl freshh loid≢hiid
+        , out2-⊑ st loid _ hiid _ freshl freshh loid≢hiid
 step-extends {st = st} (bytes32-from-low-high (loop , hiop) output) e fresh
   with resolveᶠ (State.mem st) loop | resolveᶠ (State.mem st) hiop
 ... | just lo | just hi with low-high→bytes32 lo hi

@@ -390,7 +390,15 @@ private
     e _ _ _ ptiIH ptoIH prvIH
     with resolve (State.mem st) bytes
   ... | just (val-bytes32 b) with refl ← e = ptiIH , ptoIH , prvIH
-  step-transcripts {st = st} (from-bytes32 bytes bytes32 output) is e _ _ _
+  step-transcripts {st = st} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output) is e _ _ _
+    ptiIH ptoIH prvIH
+    with resolve (State.mem st) bytes
+  ... | just (val-bytes32 b) = case e of λ ()
+  step-transcripts {st = st} (from-bytes32 bytes bool output) is e _ _ _
+    ptiIH ptoIH prvIH
+    with resolve (State.mem st) bytes
+  ... | just (val-bytes32 b) = case e of λ ()
+  step-transcripts {st = st} (from-bytes32 bytes byte output) is e _ _ _
     ptiIH ptoIH prvIH
     with resolve (State.mem st) bytes
   ... | just (val-bytes32 b) = case e of λ ()
@@ -421,8 +429,7 @@ private
   step-transcripts {st = st} (bytes32-into-low-high bytes (loid , hiid)) is e
     _ _ _ ptiIH ptoIH prvIH
     with resolve (State.mem st) bytes
-  ... | just (val-bytes32 b) with bytes32→low-high b
-  ...   | (lo , hi) with refl ← e = ptiIH , ptoIH , prvIH
+  ... | just (val-bytes32 b) with refl ← e = ptiIH , ptoIH , prvIH
   step-transcripts {st = st} (bytes32-from-low-high (loop , hiop) output) is e
     _ _ _ ptiIH ptoIH prvIH
     with resolveᶠ (State.mem st) loop | resolveᶠ (State.mem st) hiop

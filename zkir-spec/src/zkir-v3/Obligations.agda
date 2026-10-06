@@ -420,7 +420,13 @@ step-dom {st = st} (from-bytes32 bytes curve25519-base output) e d
 step-dom {st = st} (from-bytes32 bytes curve25519-scalar output) e d
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) with refl ← e = domEq-ins output _ d
-step-dom {st = st} (from-bytes32 bytes bytes32 output) e d
+step-dom {st = st} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output) e d
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-dom {st = st} (from-bytes32 bytes bool output) e d
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-dom {st = st} (from-bytes32 bytes byte output) e d
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) = case e of λ ()
 step-dom {st = st} (from-bytes32 bytes jubjub-point output) e d
@@ -443,9 +449,8 @@ step-dom {st = st} (reverse-bytes bytes output) e d
 ... | just (val-bytes32 b) with refl ← e = domEq-ins output _ d
 step-dom {st = st} (bytes32-into-low-high bytes (loid , hiid)) e d
   with resolve (State.mem st) bytes
-... | just (val-bytes32 b) with bytes32→low-high b
-...   | (lo , hi) with refl ← e =
-          domEq-ins2 st loid (val-native lo) hiid (val-native hi) d
+... | just (val-bytes32 b) with refl ← e =
+          domEq-ins2 st loid _ hiid _ d
 step-dom {st = st} (bytes32-from-low-high (loop , hiop) output) e d
   with resolveᶠ (State.mem st) loop | resolveᶠ (State.mem st) hiop
 ... | just lo | just hi with low-high→bytes32 lo hi
@@ -820,8 +825,14 @@ decode-typeof native (x ∷ []) refl = refl
 decode-typeof jubjub-scalar (s ∷ []) e
   with jubjubScalarFromFr s
 ... | just _ with refl ← e = refl
-decode-typeof bytes32 (lo ∷ hi ∷ []) e
-  with low-high→bytes32 lo hi
+decode-typeof bool (x ∷ []) e
+  with fr→bool x
+... | just _ with refl ← e = refl
+decode-typeof byte (x ∷ []) e
+  with unpackᶠ 1 x
+... | just _ with refl ← e = refl
+decode-typeof (bytes⟨ n ⟩) xs e
+  with decode-bytes n xs
 ... | just _ with refl ← e = refl
 decode-typeof jubjub-point (x ∷ y ∷ []) e
   with fromCoordsJ x y
@@ -857,7 +868,9 @@ decode-typeof curve25519-point (a ∷ b ∷ c ∷ d ∷ []) e
 -- The default value of a type has that type.
 default-typeof : ∀ t → typeof (default-val t) ≡ t
 default-typeof native            = refl
-default-typeof bytes32           = refl
+default-typeof bool              = refl
+default-typeof byte              = refl
+default-typeof (bytes⟨ _ ⟩)      = refl
 default-typeof jubjub-point      = refl
 default-typeof jubjub-scalar     = refl
 default-typeof secp256k1-point        = refl
@@ -1959,7 +1972,13 @@ step-ty {st = st} (from-bytes32 bytes curve25519-scalar output) oty e teq
 step-ty {st = st} (from-bytes32 bytes secp256k1-point output) oty e teq _ _
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) = case e of λ ()
-step-ty {st = st} (from-bytes32 bytes bytes32 output) oty e teq _ _
+step-ty {st = st} (from-bytes32 bytes (bytes⟨ nᵇ ⟩) output) oty e teq _ _
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-ty {st = st} (from-bytes32 bytes bool output) oty e teq _ _
+  with resolve (State.mem st) bytes
+... | just (val-bytes32 b) = case e of λ ()
+step-ty {st = st} (from-bytes32 bytes byte output) oty e teq _ _
   with resolve (State.mem st) bytes
 ... | just (val-bytes32 b) = case e of λ ()
 step-ty {st = st} (from-bytes32 bytes jubjub-point output) oty e teq _ _
@@ -2144,10 +2163,9 @@ step-ty {st = st} {Γ = Γ} (into-coordinates point (xid , yid)) oty e teq
 step-ty {st = st} (bytes32-into-low-high bytes (loid , hiid)) oty e teq
   (l∉ ∷ h∉ ∷ []) ((l≢h , _) , _)
   with refl ← oty with resolve (State.mem st) bytes
-... | just (val-bytes32 b) with bytes32→low-high b
-...   | (lo , hi) with refl ← e =
-          tyEq-ins2 (State.mem st) _ loid (val-native lo) native
-            hiid (val-native hi) native refl refl l∉ h∉
+... | just (val-bytes32 b) with refl ← e =
+          tyEq-ins2 (State.mem st) _ loid _ native
+            hiid _ native refl refl l∉ h∉
             (λ h≡l → l≢h (sym h≡l)) teq
 -- List native outputs (`insertMany`).
 step-ty {st = st} (encode input outputs) oty e teq af nd
